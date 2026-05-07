@@ -28,7 +28,7 @@ namespace Proyecto3D
         {
             this.DoubleBuffered = true;
             this.Size = new Size(800, 600);
-            this.Text = "Proyecto 3D-Slime";
+            this.Text = "Proyecto 3D-Slime (Derretimiento Físico e Inercia)";
             this.BackColor = Color.FromArgb(20, 20, 20);
             this.KeyPreview = true;
 
@@ -54,9 +54,29 @@ namespace Proyecto3D
 
             for (int i = 0; i < slimes.Count; i++)
             {
+                // --- 1. CHEQUEO DE DIVISIÓN POR TENSIÓN (DERRETIMIENTO MÁXIMO) ---
+                if (slimes[i].NeedsDivision)
+                {
+                    if (slimes[i].Size > 25)
+                    {
+                        var hijos = slimes[i].Dividir(particles);
+                        if (draggedSlime == slimes[i]) draggedSlime = null; // Lo soltamos automáticamente
+                        slimes.RemoveAt (i);
+                        slimes.AddRange (hijos);
+                        i--;
+                        continue;
+                    }
+                    else
+                    {
+                        slimes[i].NeedsDivision = false; // Es muy pequeño para dividirse
+                    }
+                }
+
+                // --- 2. ACTUALIZACIÓN FÍSICA NORMAL ---
                 bool isBeingDragged = (slimes[i] == draggedSlime);
                 slimes[i].UpdatePhysics(isBeingDragged, particles);
 
+                // --- 3. LÓGICA DE FUSIÓN ---
                 for (int j = i + 1; j < slimes.Count; j++)
                 {
                     var s1 = slimes[i];
@@ -134,6 +154,11 @@ namespace Proyecto3D
                 draggedSlime.Rotate(dx * 0.015f, dy * 0.015f);
                 draggedSlime.X += dx;
                 draggedSlime.Y += dy;
+
+                // INYECTAMOS INERCIA PARA EL EFECTO LÍQUIDO
+                draggedSlime.bendX += dx;
+                draggedSlime.bendY += dy;
+
                 lastMousePos = e.Location;
             }
         }
@@ -274,6 +299,8 @@ namespace Proyecto3D
 
         public int Cooldown = 0;
 
+        public bool NeedsDivision = false; // Bandera para alertar al GameLoop
+
         private float
 
                 angleX = 0,
@@ -287,10 +314,17 @@ namespace Proyecto3D
                 vY = 0,
                 vZ = 0;
 
-        // --- VARIABLES DE GELATINA (SQUASH & STRETCH) ---
-        public float scaleY = 1.0f; // Escala vertical actual
+        // --- VARIABLES DE GELATINA Y DERRETIMIENTO ---
+        public float scaleY = 1.0f;
 
-        public float vScaleY = 0.0f; // Velocidad de deformación
+        public float vScaleY = 0.0f;
+
+        public float dragMelt = 0.0f;
+
+        // --- INERCIA (Dirección de la curvatura) ---
+        public float bendX = 0.0f;
+
+        public float bendY = 0.0f;
 
         private int jumpTimer = 0;
 
@@ -315,30 +349,70 @@ namespace Proyecto3D
         {
             if (Cooldown > 0) Cooldown--;
 
-            // --- MOTOR DE RESORTE (FÍSICA DE GELATINA) ---
-            // Intenta volver a su escala normal (1.0) usando la Ley de Hooke
-            float springForce = (1.0f - scaleY) * 0.15f;
-            vScaleY += springForce;
-            vScaleY *= 0.85f; // Fricción del resorte para que no rebote para siempre
-            scaleY += vScaleY;
+            // Fricción a la inercia para que la gota regrese al centro al detener el mouse
+            bendX *= 0.85f;
+            bendY *= 0.85f;
 
-            // Límite para evitar que se invierta matemáticamente
-            if (scaleY < 0.2f) scaleY = 0.2f;
+            // Limitamos la inercia para que no se deforme hasta el infinito si agitas muy rápido
+            bendX = Math.Max(-60, Math.Min(60, bendX));
+            bendY = Math.Max(-60, Math.Min(60, bendY));
 
             if (isBeingDragged)
             {
                 vX = vY = vZ = 0;
                 targetAngleY = angleY;
+                scaleY += (1.0f - scaleY) * 0.1f;
+                vScaleY = 0;
+
+                // Aumenta el nivel de tensión (derretimiento)
+                dragMelt += 0.015f;
+
+                // Si la masa no aguanta más, se rompe por tensión
+                if (dragMelt >= 1.0f)
+                {
+                    dragMelt = 1.0f;
+                    NeedsDivision = true;
+                }
+
+                // Gotitas de gelatina
+                if (rand.Next(100) < 15)
+                {
+                    particles
+                        .Add(new Particle(X +
+                            rand.Next((int) - Size / 4, (int) Size / 4),
+                            Y + Size / 2 + (dragMelt * Size * 1.5f),
+                            Z,
+                            Size * 0.1f,
+                            0,
+                            rand.Next(1, 4),
+                            0));
+                }
                 return;
             }
 
-            if (Math.Abs(vX) > 0.5f || Math.Abs(vZ) > 0.5f)
+            // --- SI LO SUELTAS ANTES DE QUE SE ROMPA ---
+            NeedsDivision = false;
+            if (dragMelt > 0)
             {
-                targetAngleY = (float) Math.Atan2(-vX, -vZ);
+                dragMelt -= 0.1f;
+                if (dragMelt <= 0)
+                {
+                    dragMelt = 0;
+                    vScaleY = -0.3f; // Rebote tipo resorte
+                }
             }
 
-            angleX += (0 - angleX) * 0.08f;
+            // Físicas normales de salto
+            float springForce = (1.0f - scaleY) * 0.15f;
+            vScaleY += springForce;
+            vScaleY *= 0.85f;
+            scaleY += vScaleY;
+            if (scaleY < 0.2f) scaleY = 0.2f;
 
+            if (Math.Abs(vX) > 0.5f || Math.Abs(vZ) > 0.5f)
+                targetAngleY = (float) Math.Atan2(-vX, -vZ);
+
+            angleX += (0 - angleX) * 0.08f;
             float diff = targetAngleY - angleY;
             while (diff <= -Math.PI) diff += (float)(2 * Math.PI);
             while (diff > Math.PI) diff -= (float)(2 * Math.PI);
@@ -356,14 +430,13 @@ namespace Proyecto3D
                 minZ = 150,
                 maxZ = 650,
                 bounce = -0.7f;
-
             if (X > limX)
             {
                 X = limX;
                 vX *= bounce;
                 EmitirParticulasPared(particles, -5, 0);
                 vScaleY += 0.2f;
-            } // Tiembla al chocar
+            }
             if (X < -limX)
             {
                 X = -limX;
@@ -389,12 +462,7 @@ namespace Proyecto3D
             float limY = 200 - (Size / 2);
             if (Y >= limY)
             {
-                // APLASTAMIENTO AL CAER
-                if (vY > 2.0f)
-                {
-                    vScaleY -= vY * 0.03f; // Se aplasta dependiendo de qué tan duro cayó
-                }
-
+                if (vY > 2.0f) vScaleY -= vY * 0.03f;
                 Y = limY;
                 vY = 0;
                 jumpTimer--;
@@ -404,12 +472,8 @@ namespace Proyecto3D
                     vY = -rand.Next(10, 16);
                     vX += rand.Next(-8, 9);
                     vZ += rand.Next(-8, 9);
-
-                    // ESTIRAMIENTO AL SALTAR
                     vScaleY += 0.35f;
-
                     AudioEngine.PlayJump();
-
                     for (int i = 0; i < 8; i++)
                     particles
                         .Add(new Particle(X +
@@ -481,9 +545,7 @@ namespace Proyecto3D
                 { Cooldown = 120, vX = 8, vY = -10, vScaleY = 0.4f };
             h1.angleX = h2.angleX = angleX;
             h1.angleY = h2.angleY = angleY;
-
             AudioEngine.PlayDivide();
-
             for (int i = 0; i < 20; i++)
             particles
                 .Add(new Particle(X,
@@ -493,7 +555,6 @@ namespace Proyecto3D
                     rand.Next(-6, 7),
                     rand.Next(-8, 2),
                     rand.Next(-6, 7)));
-
             return new List<Slime> { h1, h2 };
         }
 
@@ -506,7 +567,7 @@ namespace Proyecto3D
                     1.0 / 3.0);
             this.Cooldown = 30;
             this.vY = -8;
-            this.vScaleY = 0.5f; // Estirón dramático al fusionarse
+            this.vScaleY = 0.5f;
         }
 
         public void Render(Graphics g, int cX, int cY, bool isSelected)
@@ -514,13 +575,12 @@ namespace Proyecto3D
             float s = Size / 2;
             float zF = -s - 0.5f;
 
-            Vector3[] outer = GetCubePoints(s);
-            Vector3[] core = GetCubePoints(s * 0.6f);
-
+            Vector3[]
+                outer = GetCubePoints(s),
+                core = GetCubePoints(s * 0.6f);
             float
                 eS = Size * 0.12f,
-                eO = Size * 0.22f;
-            float
+                eO = Size * 0.22f,
                 mW = Size * 0.15f,
                 mH = Size * 0.08f,
                 mY = Size * 0.15f;
@@ -530,7 +590,6 @@ namespace Proyecto3D
             Vector3[] eyeR = GetRect(eO - eS, eO + eS, -eO - eS, -eO + eS, zF);
             Vector3[] mouth = GetRect(-mW, mW, mY, mY + mH, zF);
 
-            // APLICAMOS LA DEFORMACIÓN DE GELATINA (Squash & Stretch)
             outer = ApplySquash(outer, s);
             core = ApplySquash(core, s);
             eyeL = ApplySquash(eyeL, s);
@@ -539,7 +598,6 @@ namespace Proyecto3D
 
             Color renderColor =
                 isSelected ? Color.FromArgb(200, 200, 255, 200) : outerColor;
-
             DrawWireframe(g, Proyectar(core, cX, cY), coreColor, 4);
             DrawWireframe(g, Proyectar(outer, cX, cY), renderColor, 2);
 
@@ -551,20 +609,43 @@ namespace Proyecto3D
             }
         }
 
-        // --- SISTEMA DE DEFORMACIÓN MATEMÁTICA ---
         private Vector3[] ApplySquash(Vector3[] pts, float baseS)
         {
-            // Conservación del volumen: si se achica en Y, crece en X y Z
             float scaleXZ = 1.0f / (float) Math.Sqrt(scaleY);
-
-            // Compensación para que el cubo siempre toque el suelo por la base
             float yOffset = baseS * (1.0f - scaleY);
 
             for (int i = 0; i < pts.Length; i++)
             {
+                float origY = pts[i].Y;
+
                 pts[i].X *= scaleXZ;
                 pts[i].Z *= scaleXZ;
-                pts[i].Y = (pts[i].Y * scaleY) + yOffset;
+                pts[i].Y = (origY * scaleY) + yOffset;
+
+                // --- DEFORMACIÓN Y CURVATURA (EFECTO GOTA Y LÍQUIDO) ---
+                if (dragMelt > 0)
+                {
+                    float normalizedY = (origY + baseS) / (2 * baseS);
+                    if (normalizedY < 0) normalizedY = 0;
+                    if (normalizedY > 1) normalizedY = 1;
+
+                    // 1. Efecto colgar (Gravedad Hacia abajo)
+                    float sag =
+                        (normalizedY * normalizedY) * dragMelt * baseS * 2.5f;
+                    pts[i].Y += sag;
+
+                    // 2. Pellizco arriba y ensanchamiento abajo
+                    float pinch = 1.0f - (dragMelt * 0.45f);
+                    float bulge = 1.0f + (dragMelt * 0.15f);
+                    float currentWidth = pinch + (bulge - pinch) * normalizedY;
+                    pts[i].X *= currentWidth;
+                    pts[i].Z *= currentWidth;
+
+                    // 3. Efecto de INERCIA (Resistencia al movimiento)
+                    // La parte de abajo (normalizedY = 1) se queda "rezagada" en dirección opuesta a bendX y bendY
+                    pts[i].X -= bendX * normalizedY * dragMelt * 0.3f;
+                    pts[i].Y -= bendY * normalizedY * dragMelt * 0.3f;
+                }
             }
             return pts;
         }
@@ -596,8 +677,9 @@ namespace Proyecto3D
             for (int i = 0; i < points.Length; i++)
             {
                 var v = points[i].RotateX(angleX).RotateY(angleY);
-                float f = 500 / (500 + v.Z + Z);
-                p[i] = new PointF(cX + (v.X + X) * f, cY + (v.Y + Y) * f);
+                p[i] =
+                    new PointF(cX + (v.X + X) * (500 / (500 + v.Z + Z)),
+                        cY + (v.Y + Y) * (500 / (500 + v.Z + Z)));
             }
             return p;
         }
