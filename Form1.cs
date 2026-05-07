@@ -28,7 +28,7 @@ namespace Proyecto3D
         {
             this.DoubleBuffered = true;
             this.Size = new Size(800, 600);
-            this.Text = "Proyecto 3D-Slime (Derretimiento Físico e Inercia)";
+            this.Text = "Proyecto 3D-Slime";
             this.BackColor = Color.FromArgb(20, 20, 20);
             this.KeyPreview = true;
 
@@ -47,6 +47,11 @@ namespace Proyecto3D
 
         private void GameLoop(object sender, EventArgs e)
         {
+            // Main update loop (runs every frame via a Timer).
+            // Responsibilities:
+            // - Update particles and remove expired ones
+            // - Update each slime: handle forced division, physics, and merging
+            // - Trigger rendering by invalidating the form
             for (int i = particles.Count - 1; i >= 0; i--)
             {
                 if (particles[i].Update()) particles.RemoveAt(i);
@@ -105,6 +110,8 @@ namespace Proyecto3D
 
         private void Form1_KeyDown(object sender, KeyEventArgs e)
         {
+            // Simple keyboard controls to scale all slimes up/down.
+            // Uses '+' and '-' keys (both numeric pad and main keys).
             if (e.KeyCode == Keys.Oemplus || e.KeyCode == Keys.Add)
                 foreach (var s in slimes) s.Size *= 1.1f;
             else if (e.KeyCode == Keys.OemMinus || e.KeyCode == Keys.Subtract)
@@ -113,6 +120,9 @@ namespace Proyecto3D
 
         private void Form1_MouseDown(object sender, MouseEventArgs e)
         {
+            // On left mouse down: attempt to pick (select) a slime for dragging.
+            // The slimes are tested in order of increasing depth (Z) so that
+            // nearer slimes can be selected before farther ones.
             if (e.Button == MouseButtons.Left)
             {
                 int
@@ -144,6 +154,8 @@ namespace Proyecto3D
 
         private void Form1_MouseMove(object sender, MouseEventArgs e)
         {
+            // While dragging a slime, update its position, rotation and
+            // impart 'bend' inertia for the liquid-like deformation.
             if (draggedSlime != null)
             {
                 float
@@ -165,6 +177,8 @@ namespace Proyecto3D
 
         private void Form1_MouseUp(object sender, MouseEventArgs e)
         {
+            // On mouse release: if the slime was clicked (not moved) and
+            // large enough, split it into two child slimes.
             if (
                 e.Button == MouseButtons.Left &&
                 draggedSlime != null &&
@@ -183,6 +197,8 @@ namespace Proyecto3D
 
         protected override void OnPaint(PaintEventArgs e)
         {
+            // Renders slimes and particles. Slimes are drawn from far to
+            // near to ensure correct overlap; particles are rendered after.
             e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
             int
                 cX = this.Width / 2,
@@ -198,6 +214,8 @@ namespace Proyecto3D
 
     public static class AudioEngine
     {
+        // Small helper to run simple beep sounds asynchronously so audio
+        // does not block the UI thread. Uses Console.Beep for simplicity.
         public static void PlayJump() =>
             Task
                 .Run(() =>
@@ -228,6 +246,8 @@ namespace Proyecto3D
 
     public class Particle
     {
+        // Simple particle used for splash and breakup effects.
+        // Particles have position, velocity, size and a limited life.
         public float
 
                 X,
@@ -266,6 +286,9 @@ namespace Proyecto3D
 
         public bool Update()
         {
+            // Update particle physics: gravity and position.
+            // Returns true when particle life has ended and it should
+            // be removed from the particles list.
             vY += 0.5f;
             X += vX;
             Y += vY;
@@ -276,6 +299,8 @@ namespace Proyecto3D
 
         public void Render(Graphics g, int cX, int cY)
         {
+            // Render the particle as a small rectangle with depth scaling
+            // and fade-out based on remaining life.
             float f = 500 / (500 + Z);
             float pSize = Size * f * ((float) Life / MaxLife);
             using (Brush b = new SolidBrush(Color.FromArgb(200, 50, 200, 50)))
@@ -290,6 +315,11 @@ namespace Proyecto3D
 
     public class Slime
     {
+        // Slime represents a soft body made from an 8-point cube mesh.
+        // It stores position, velocity, orientation and soft-body state
+        // such as scaleY (squash/stretch), dragMelt (tension for splitting)
+        // and bendX/bendY (inertia for deformation). Slimes can split,
+        // merge, jump and emit particles when hitting walls or jumping.
         public float
 
                 X,
@@ -347,6 +377,11 @@ namespace Proyecto3D
 
         public void UpdatePhysics(bool isBeingDragged, List<Particle> particles)
         {
+            // Core per-frame physics for a single slime.
+            // - Handles dragging behavior (tension build-up and small droplets)
+            // - Spring-like squash/stretch while on the ground
+            // - Gravity and simple bounds with particle emission on collision
+            // - Random jumping behavior and its particle burst
             if (Cooldown > 0) Cooldown--;
 
             // Fricción a la inercia para que la gota regrese al centro al detener el mouse
@@ -494,6 +529,7 @@ namespace Proyecto3D
             float pushZ
         )
         {
+            // Emit several particles when the slime hits a world boundary.
             for (int i = 0; i < 6; i++)
             particles
                 .Add(new Particle(X,
@@ -507,6 +543,7 @@ namespace Proyecto3D
 
         public void Rotate(float ax, float ay)
         {
+            // Apply a small rotation to the slime mesh (used during drag).
             angleY += ax;
             angleX += ay;
             targetAngleY = angleY;
@@ -514,6 +551,8 @@ namespace Proyecto3D
 
         public void AtraerA(Slime otro)
         {
+            // Small attraction force used to make nearby slimes move toward
+            // each other (helps merging behavior). Disabled while on cooldown.
             if (Cooldown <= 0)
             {
                 vX += (otro.X - X) * 0.03f;
@@ -530,6 +569,10 @@ namespace Proyecto3D
 
         public List<Slime> Dividir(List<Particle> particles)
         {
+            // Split this slime into two smaller slimes.
+            // Produces particles to simulate breakup and returns the two
+            // new Slime instances. The children inherit orientation and
+            // receive initial velocities.
             float newSize = Size / 1.25992f;
             var h1 =
                 new Slime(X - Size / 2,
@@ -560,6 +603,9 @@ namespace Proyecto3D
 
         public void Fusionar(Slime otro)
         {
+            // Merge another slime into this one by computing a new volume-
+            // preserving size (cube-root of sum of volumes), set a small
+            // cooldown and give a bounce impulse.
             this.Size =
                 (float)
                 Math
@@ -572,6 +618,9 @@ namespace Proyecto3D
 
         public void Render(Graphics g, int cX, int cY, bool isSelected)
         {
+            // Render the slime by building outer and core cube meshes,
+            // applying squash/deformation, projecting to 2D and drawing
+            // a wireframe plus simple face features (eyes/mouth).
             float s = Size / 2;
             float zF = -s - 0.5f;
 
@@ -611,6 +660,10 @@ namespace Proyecto3D
 
         private Vector3[] ApplySquash(Vector3[] pts, float baseS)
         {
+            // Apply vertical squash/stretch and additional deformation
+            // caused by dragMelt (tension) and bend inertia. This is the
+            // heart of the soft-body visual effect; it modifies the cube
+            // sample points before projection.
             float scaleXZ = 1.0f / (float) Math.Sqrt(scaleY);
             float yOffset = baseS * (1.0f - scaleY);
 
@@ -673,6 +726,9 @@ namespace Proyecto3D
 
         private PointF[] Proyectar(Vector3[] points, int cX, int cY)
         {
+            // Project 3D points into 2D screen coordinates with a
+            // simple perspective factor (500 / (500 + Z)). Also applies
+            // local rotation based on angleX/angleY.
             PointF[] p = new PointF[points.Length];
             for (int i = 0; i < points.Length; i++)
             {
@@ -691,6 +747,8 @@ namespace Proyecto3D
             float thickness
         )
         {
+            // Draws the cube edges from an index list. Used by Render to
+            // visualize the outer and core wireframes.
             int[][] lines =
             {
                 new int[] { 0, 1 },
@@ -713,6 +771,9 @@ namespace Proyecto3D
 
     public struct Vector3
     {
+        // Minimal 3D vector used for mesh point storage and simple
+        // rotation helpers around X and Y axes. The rotations are used
+        // when projecting the cube-based slimes.
         public float
 
                 X,
