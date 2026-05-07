@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Linq;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 
 using Timer = System.Windows.Forms.Timer;
@@ -15,6 +16,8 @@ namespace Proyecto3D
 
         private List<Slime> slimes;
 
+        private List<Particle> particles;
+
         private Point lastMousePos;
 
         private Slime draggedSlime = null;
@@ -25,11 +28,12 @@ namespace Proyecto3D
         {
             this.DoubleBuffered = true;
             this.Size = new Size(800, 600);
-            this.Text = "Slime 3D";
+            this.Text = "Proyecto 3D-Slime";
             this.BackColor = Color.FromArgb(20, 20, 20);
             this.KeyPreview = true;
 
-            slimes = new List<Slime> { new Slime(0, -100, 300, 80) };
+            slimes = new List<Slime> { new Slime(0, -100, 300, 100) };
+            particles = new List<Particle>();
 
             gameTimer = new Timer { Interval = 16 };
             gameTimer.Tick += GameLoop;
@@ -43,10 +47,15 @@ namespace Proyecto3D
 
         private void GameLoop(object sender, EventArgs e)
         {
+            for (int i = particles.Count - 1; i >= 0; i--)
+            {
+                if (particles[i].Update()) particles.RemoveAt(i);
+            }
+
             for (int i = 0; i < slimes.Count; i++)
             {
                 bool isBeingDragged = (slimes[i] == draggedSlime);
-                slimes[i].UpdatePhysics(isBeingDragged);
+                slimes[i].UpdatePhysics(isBeingDragged, particles);
 
                 for (int j = i + 1; j < slimes.Count; j++)
                 {
@@ -56,21 +65,18 @@ namespace Proyecto3D
                     float dist = s1.GetDistancia(s2);
                     float distanciaColision = (s1.Size + s2.Size) * 0.6f;
 
-                    if (dist > 5)
-                    {
-                        s1.AtraerA (s2);
-                    }
+                    if (dist > 5) s1.AtraerA(s2);
 
-                    if (dist < distanciaColision)
+                    if (
+                        dist < distanciaColision &&
+                        s1.Cooldown <= 0 &&
+                        s2.Cooldown <= 0
+                    )
                     {
-                        if (s1.Cooldown <= 0 && s2.Cooldown <= 0)
-                        {
-                            s1.Fusionar (s2);
-                            slimes.RemoveAt (j);
-
-                            if (draggedSlime == s2) draggedSlime = s1;
-                            break;
-                        }
+                        s1.Fusionar (s2);
+                        slimes.RemoveAt (j);
+                        if (draggedSlime == s2) draggedSlime = s1;
+                        break;
                     }
                 }
             }
@@ -80,24 +86,18 @@ namespace Proyecto3D
         private void Form1_KeyDown(object sender, KeyEventArgs e)
         {
             if (e.KeyCode == Keys.Oemplus || e.KeyCode == Keys.Add)
-            {
                 foreach (var s in slimes) s.Size *= 1.1f;
-            }
             else if (e.KeyCode == Keys.OemMinus || e.KeyCode == Keys.Subtract)
-            {
-                foreach (var s in slimes)
-                {
-                    if (s.Size > 5) s.Size *= 0.9f;
-                }
-            }
+                foreach (var s in slimes) if (s.Size > 5) s.Size *= 0.9f;
         }
 
         private void Form1_MouseDown(object sender, MouseEventArgs e)
         {
             if (e.Button == MouseButtons.Left)
             {
-                int cX = this.Width / 2;
-                int cY = this.Height / 2;
+                int
+                    cX = this.Width / 2,
+                    cY = this.Height / 2;
                 draggedSlime = null;
                 mouseMoved = false;
                 lastMousePos = e.Location;
@@ -105,16 +105,15 @@ namespace Proyecto3D
                 foreach (var s in slimes.OrderBy(s => s.Z))
                 {
                     float f = 500 / (500 + s.Z);
-                    float pX = cX + s.X * f;
-                    float pY = cY + s.Y * f;
-
-                    float dist =
-                        (float)
+                    float
+                        pX = cX + s.X * f,
+                        pY = cY + s.Y * f;
+                    if (
                         Math
                             .Sqrt(Math.Pow(pX - e.X, 2) +
-                            Math.Pow(pY - e.Y, 2));
-
-                    if (dist < s.Size * f)
+                            Math.Pow(pY - e.Y, 2)) <
+                        s.Size * f
+                    )
                     {
                         draggedSlime = s;
                         break;
@@ -127,15 +126,14 @@ namespace Proyecto3D
         {
             if (draggedSlime != null)
             {
-                float dx = e.X - lastMousePos.X;
-                float dy = e.Y - lastMousePos.Y;
-
+                float
+                    dx = e.X - lastMousePos.X,
+                    dy = e.Y - lastMousePos.Y;
                 if (Math.Abs(dx) > 2 || Math.Abs(dy) > 2) mouseMoved = true;
 
                 draggedSlime.Rotate(dx * 0.015f, dy * 0.015f);
                 draggedSlime.X += dx;
                 draggedSlime.Y += dy;
-
                 lastMousePos = e.Location;
             }
         }
@@ -148,9 +146,9 @@ namespace Proyecto3D
                 !mouseMoved
             )
             {
-                if (draggedSlime.Size > 20)
+                if (draggedSlime.Size > 25)
                 {
-                    var hijos = draggedSlime.Dividir();
+                    var hijos = draggedSlime.Dividir(particles);
                     slimes.Remove (draggedSlime);
                     slimes.AddRange (hijos);
                 }
@@ -161,14 +159,107 @@ namespace Proyecto3D
         protected override void OnPaint(PaintEventArgs e)
         {
             e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
-            int cX = this.Width / 2;
-            int cY = this.Height / 2;
+            int
+                cX = this.Width / 2,
+                cY = this.Height / 2;
 
             foreach (var slime in slimes.OrderByDescending(s => s.Z))
-            {
-                bool isSelected = (slime == draggedSlime);
-                slime.Render(e.Graphics, cX, cY, isSelected);
-            }
+            slime.Render(e.Graphics, cX, cY, slime == draggedSlime);
+
+            foreach (var p in particles.OrderByDescending(p => p.Z))
+            p.Render(e.Graphics, cX, cY);
+        }
+    }
+
+    public static class AudioEngine
+    {
+        public static void PlayJump() =>
+            Task
+                .Run(() =>
+                {
+                    try
+                    {
+                        Console.Beep(300, 80);
+                    }
+                    catch
+                    {
+                    }
+                });
+
+        public static void PlayDivide() =>
+            Task
+                .Run(() =>
+                {
+                    try
+                    {
+                        Console.Beep(600, 100);
+                        Console.Beep(800, 150);
+                    }
+                    catch
+                    {
+                    }
+                });
+    }
+
+    public class Particle
+    {
+        public float
+
+                X,
+                Y,
+                Z,
+                vX,
+                vY,
+                vZ,
+                Size;
+
+        public int
+
+                Life,
+                MaxLife;
+
+        public Particle(
+            float x,
+            float y,
+            float z,
+            float size,
+            float vx,
+            float vy,
+            float vz
+        )
+        {
+            X = x;
+            Y = y;
+            Z = z;
+            Size = size;
+            vX = vx;
+            vY = vy;
+            vZ = vz;
+            MaxLife = new Random().Next(20, 40);
+            Life = MaxLife;
+        }
+
+        public bool Update()
+        {
+            vY += 0.5f;
+            X += vX;
+            Y += vY;
+            Z += vZ;
+            Life--;
+            return Life <= 0;
+        }
+
+        public void Render(Graphics g, int cX, int cY)
+        {
+            float f = 500 / (500 + Z);
+            float pSize = Size * f * ((float) Life / MaxLife);
+            using (Brush b = new SolidBrush(Color.FromArgb(200, 50, 200, 50)))
+                g
+                    .FillRectangle(b,
+                    cX + X * f - pSize / 2,
+                    cY + Y * f - pSize / 2,
+                    pSize,
+                    pSize);
         }
     }
 
@@ -188,19 +279,28 @@ namespace Proyecto3D
                 angleX = 0,
                 angleY = 0;
 
+        private float targetAngleY = 0;
+
         public float
 
                 vX = 0,
                 vY = 0,
                 vZ = 0;
 
+        // --- VARIABLES DE GELATINA (SQUASH & STRETCH) ---
+        public float scaleY = 1.0f; // Escala vertical actual
+
+        public float vScaleY = 0.0f; // Velocidad de deformación
+
         private int jumpTimer = 0;
 
         private static Random rand = new Random();
 
-        private Color bodyColor = Color.FromArgb(150, 100, 255, 100);
+        private Color outerColor = Color.FromArgb(120, 100, 255, 100);
 
-        private Color eyeColor = Color.FromArgb(255, 30, 70, 30);
+        private Color coreColor = Color.FromArgb(255, 40, 180, 40);
+
+        private Color faceColor = Color.FromArgb(255, 230, 255, 230);
 
         public Slime(float x, float y, float z, float size)
         {
@@ -211,97 +311,149 @@ namespace Proyecto3D
             jumpTimer = rand.Next(30, 100);
         }
 
-        public void UpdatePhysics(bool isBeingDragged)
+        public void UpdatePhysics(bool isBeingDragged, List<Particle> particles)
         {
             if (Cooldown > 0) Cooldown--;
 
+            // --- MOTOR DE RESORTE (FÍSICA DE GELATINA) ---
+            // Intenta volver a su escala normal (1.0) usando la Ley de Hooke
+            float springForce = (1.0f - scaleY) * 0.15f;
+            vScaleY += springForce;
+            vScaleY *= 0.85f; // Fricción del resorte para que no rebote para siempre
+            scaleY += vScaleY;
+
+            // Límite para evitar que se invierta matemáticamente
+            if (scaleY < 0.2f) scaleY = 0.2f;
+
             if (isBeingDragged)
             {
-                vX = 0;
-                vY = 0;
-                vZ = 0;
+                vX = vY = vZ = 0;
+                targetAngleY = angleY;
                 return;
             }
 
-            // --- 1. RECUPERACIÓN DE POSTURA (LERP) ---
-            // Suavemente reducimos los ángulos a 0 para que vuelva a mirar al frente
+            if (Math.Abs(vX) > 0.5f || Math.Abs(vZ) > 0.5f)
+            {
+                targetAngleY = (float) Math.Atan2(-vX, -vZ);
+            }
+
             angleX += (0 - angleX) * 0.08f;
-            angleY += (0 - angleY) * 0.08f;
 
-            // Gravedad
+            float diff = targetAngleY - angleY;
+            while (diff <= -Math.PI) diff += (float)(2 * Math.PI);
+            while (diff > Math.PI) diff -= (float)(2 * Math.PI);
+            angleY += diff * 0.1f;
+
             vY += 0.6f;
-
             X += vX;
             Y += vY;
             Z += vZ;
-
-            // Fricción general
             vX *= 0.92f;
             vZ *= 0.92f;
 
-            // --- 2. LÍMITES DE PANTALLA (Bordes) ---
-            float limiteX = 350; // Límite lateral
-            float minZ = 150; // Límite cercanía (frente)
-            float maxZ = 650; // Límite profundidad (fondo)
-            float factorRebote = -0.7f; // Invertimos velocidad y perdemos un poco de energía
+            float
+                limX = 350,
+                minZ = 150,
+                maxZ = 650,
+                bounce = -0.7f;
 
-            // Rebote en X
-            if (X > limiteX)
+            if (X > limX)
             {
-                X = limiteX;
-                vX *= factorRebote;
-            }
-            if (X < -limiteX)
+                X = limX;
+                vX *= bounce;
+                EmitirParticulasPared(particles, -5, 0);
+                vScaleY += 0.2f;
+            } // Tiembla al chocar
+            if (X < -limX)
             {
-                X = -limiteX;
-                vX *= factorRebote;
+                X = -limX;
+                vX *= bounce;
+                EmitirParticulasPared(particles, 5, 0);
+                vScaleY += 0.2f;
             }
-
-            // Rebote en Z
             if (Z > maxZ)
             {
                 Z = maxZ;
-                vZ *= factorRebote;
+                vZ *= bounce;
+                EmitirParticulasPared(particles, 0, -5);
+                vScaleY += 0.2f;
             }
             if (Z < minZ)
             {
                 Z = minZ;
-                vZ *= factorRebote;
+                vZ *= bounce;
+                EmitirParticulasPared(particles, 0, 5);
+                vScaleY += 0.2f;
             }
 
-            // Suelo (Eje Y)
-            float nivelSuelo = 200;
-            float limiteInferior = nivelSuelo - (Size / 2);
-
-            if (Y >= limiteInferior)
+            float limY = 200 - (Size / 2);
+            if (Y >= limY)
             {
-                Y = limiteInferior;
-                vY = 0;
+                // APLASTAMIENTO AL CAER
+                if (vY > 2.0f)
+                {
+                    vScaleY -= vY * 0.03f; // Se aplasta dependiendo de qué tan duro cayó
+                }
 
+                Y = limY;
+                vY = 0;
                 jumpTimer--;
                 if (jumpTimer <= 0)
                 {
                     jumpTimer = rand.Next(40, 120);
-                    vY = -rand.Next(10, 18);
-                    vX += rand.Next(-10, 11);
-                    vZ += rand.Next(-10, 11);
+                    vY = -rand.Next(10, 16);
+                    vX += rand.Next(-8, 9);
+                    vZ += rand.Next(-8, 9);
+
+                    // ESTIRAMIENTO AL SALTAR
+                    vScaleY += 0.35f;
+
+                    AudioEngine.PlayJump();
+
+                    for (int i = 0; i < 8; i++)
+                    particles
+                        .Add(new Particle(X +
+                            rand.Next((int) - Size / 2, (int) Size / 2),
+                            Y + Size / 2,
+                            Z,
+                            Size * 0.15f,
+                            rand.Next(-3, 4),
+                            rand.Next(-5, 0),
+                            rand.Next(-3, 4)));
                 }
             }
+        }
+
+        private void EmitirParticulasPared(
+            List<Particle> particles,
+            float pushX,
+            float pushZ
+        )
+        {
+            for (int i = 0; i < 6; i++)
+            particles
+                .Add(new Particle(X,
+                    Y,
+                    Z,
+                    Size * 0.15f,
+                    pushX + rand.Next(-3, 4),
+                    rand.Next(-4, 1),
+                    pushZ + rand.Next(-3, 4)));
         }
 
         public void Rotate(float ax, float ay)
         {
             angleY += ax;
             angleX += ay;
+            targetAngleY = angleY;
         }
 
         public void AtraerA(Slime otro)
         {
-            float ease = 0.03f;
             if (Cooldown <= 0)
             {
-                vX += (otro.X - X) * ease;
-                vZ += (otro.Z - Z) * ease;
+                vX += (otro.X - X) * 0.03f;
+                vZ += (otro.Z - Z) * 0.03f;
             }
         }
 
@@ -312,44 +464,113 @@ namespace Proyecto3D
                 Math.Pow(Y - otro.Y, 2) +
                 Math.Pow(Z - otro.Z, 2));
 
-        public List<Slime> Dividir()
+        public List<Slime> Dividir(List<Particle> particles)
         {
             float newSize = Size / 1.25992f;
+            var h1 =
+                new Slime(X - Size / 2,
+                    Y - 10,
+                    Z,
+                    newSize)
+                { Cooldown = 120, vX = -8, vY = -10, vScaleY = 0.4f };
+            var h2 =
+                new Slime(X + Size / 2,
+                    Y - 10,
+                    Z,
+                    newSize)
+                { Cooldown = 120, vX = 8, vY = -10, vScaleY = 0.4f };
+            h1.angleX = h2.angleX = angleX;
+            h1.angleY = h2.angleY = angleY;
 
-            var hijo1 =
-                new Slime(X - Size / 2, Y - 10, Z, newSize) { Cooldown = 120 };
-            var hijo2 =
-                new Slime(X + Size / 2, Y - 10, Z, newSize) { Cooldown = 120 };
+            AudioEngine.PlayDivide();
 
-            hijo1.vX = -8;
-            hijo1.vY = -10;
-            hijo2.vX = 8;
-            hijo2.vY = -10;
+            for (int i = 0; i < 20; i++)
+            particles
+                .Add(new Particle(X,
+                    Y,
+                    Z,
+                    Size * 0.2f,
+                    rand.Next(-6, 7),
+                    rand.Next(-8, 2),
+                    rand.Next(-6, 7)));
 
-            hijo1.angleX = this.angleX;
-            hijo1.angleY = this.angleY;
-            hijo2.angleX = this.angleX;
-            hijo2.angleY = this.angleY;
-
-            return new List<Slime> { hijo1, hijo2 };
+            return new List<Slime> { h1, h2 };
         }
 
         public void Fusionar(Slime otro)
         {
-            double vol1 = Math.Pow(this.Size, 3);
-            double vol2 = Math.Pow(otro.Size, 3);
-            this.Size = (float) Math.Pow(vol1 + vol2, 1.0 / 3.0);
+            this.Size =
+                (float)
+                Math
+                    .Pow(Math.Pow(this.Size, 3) + Math.Pow(otro.Size, 3),
+                    1.0 / 3.0);
             this.Cooldown = 30;
-
             this.vY = -8;
+            this.vScaleY = 0.5f; // Estirón dramático al fusionarse
         }
 
         public void Render(Graphics g, int cX, int cY, bool isSelected)
         {
             float s = Size / 2;
+            float zF = -s - 0.5f;
 
-            Vector3[] cubePoints =
+            Vector3[] outer = GetCubePoints(s);
+            Vector3[] core = GetCubePoints(s * 0.6f);
+
+            float
+                eS = Size * 0.12f,
+                eO = Size * 0.22f;
+            float
+                mW = Size * 0.15f,
+                mH = Size * 0.08f,
+                mY = Size * 0.15f;
+
+            Vector3[] eyeL =
+                GetRect(-eO - eS, -eO + eS, -eO - eS, -eO + eS, zF);
+            Vector3[] eyeR = GetRect(eO - eS, eO + eS, -eO - eS, -eO + eS, zF);
+            Vector3[] mouth = GetRect(-mW, mW, mY, mY + mH, zF);
+
+            // APLICAMOS LA DEFORMACIÓN DE GELATINA (Squash & Stretch)
+            outer = ApplySquash(outer, s);
+            core = ApplySquash(core, s);
+            eyeL = ApplySquash(eyeL, s);
+            eyeR = ApplySquash(eyeR, s);
+            mouth = ApplySquash(mouth, s);
+
+            Color renderColor =
+                isSelected ? Color.FromArgb(200, 200, 255, 200) : outerColor;
+
+            DrawWireframe(g, Proyectar(core, cX, cY), coreColor, 4);
+            DrawWireframe(g, Proyectar(outer, cX, cY), renderColor, 2);
+
+            using (Brush b = new SolidBrush(faceColor))
             {
+                g.FillPolygon(b, Proyectar(eyeL, cX, cY));
+                g.FillPolygon(b, Proyectar(eyeR, cX, cY));
+                g.FillPolygon(b, Proyectar(mouth, cX, cY));
+            }
+        }
+
+        // --- SISTEMA DE DEFORMACIÓN MATEMÁTICA ---
+        private Vector3[] ApplySquash(Vector3[] pts, float baseS)
+        {
+            // Conservación del volumen: si se achica en Y, crece en X y Z
+            float scaleXZ = 1.0f / (float) Math.Sqrt(scaleY);
+
+            // Compensación para que el cubo siempre toque el suelo por la base
+            float yOffset = baseS * (1.0f - scaleY);
+
+            for (int i = 0; i < pts.Length; i++)
+            {
+                pts[i].X *= scaleXZ;
+                pts[i].Z *= scaleXZ;
+                pts[i].Y = (pts[i].Y * scaleY) + yOffset;
+            }
+            return pts;
+        }
+
+        private Vector3[] GetCubePoints(float s) =>
+            new Vector3[] {
                 new Vector3(-s, -s, -s),
                 new Vector3(s, -s, -s),
                 new Vector3(s, s, -s),
@@ -360,56 +581,33 @@ namespace Proyecto3D
                 new Vector3(-s, s, s)
             };
 
-            float eS = Size * 0.15f;
-            float eO = Size * 0.25f;
-
-            float eyeDepth = -s - 1;
-
-            Vector3[] eyeL =
-            {
-                new Vector3(-eO - eS, -eO - eS, eyeDepth),
-                new Vector3(-eO + eS, -eO - eS, eyeDepth),
-                new Vector3(-eO + eS, -eO + eS, eyeDepth),
-                new Vector3(-eO - eS, -eO + eS, eyeDepth)
+        private Vector3[]
+        GetRect(float x1, float x2, float y1, float y2, float z) =>
+            new Vector3[] {
+                new Vector3(x1, y1, z),
+                new Vector3(x2, y1, z),
+                new Vector3(x2, y2, z),
+                new Vector3(x1, y2, z)
             };
-            Vector3[] eyeR =
-            {
-                new Vector3(eO - eS, -eO - eS, eyeDepth),
-                new Vector3(eO + eS, -eO - eS, eyeDepth),
-                new Vector3(eO + eS, -eO + eS, eyeDepth),
-                new Vector3(eO - eS, -eO + eS, eyeDepth)
-            };
-
-            PointF[] pBody = Proyectar(cubePoints, cX, cY);
-
-            Color renderColor =
-                isSelected ? Color.FromArgb(200, 200, 255, 200) : bodyColor;
-            DrawWireframe (g, pBody, renderColor);
-
-            PointF[] pEyeL = Proyectar(eyeL, cX, cY);
-            PointF[] pEyeR = Proyectar(eyeR, cX, cY);
-
-            using (Brush b = new SolidBrush(eyeColor))
-            {
-                g.FillPolygon (b, pEyeL);
-                g.FillPolygon (b, pEyeR);
-            }
-        }
 
         private PointF[] Proyectar(Vector3[] points, int cX, int cY)
         {
-            PointF[] projected = new PointF[points.Length];
+            PointF[] p = new PointF[points.Length];
             for (int i = 0; i < points.Length; i++)
             {
                 var v = points[i].RotateX(angleX).RotateY(angleY);
                 float f = 500 / (500 + v.Z + Z);
-                projected[i] =
-                    new PointF(cX + (v.X + X) * f, cY + (v.Y + Y) * f);
+                p[i] = new PointF(cX + (v.X + X) * f, cY + (v.Y + Y) * f);
             }
-            return projected;
+            return p;
         }
 
-        private void DrawWireframe(Graphics g, PointF[] p, Color col)
+        private void DrawWireframe(
+            Graphics g,
+            PointF[] p,
+            Color col,
+            float thickness
+        )
         {
             int[][] lines =
             {
@@ -426,7 +624,7 @@ namespace Proyecto3D
                 new int[] { 2, 6 },
                 new int[] { 3, 7 }
             };
-            using (Pen pen = new Pen(col, 2))
+            using (Pen pen = new Pen(col, thickness))
                 foreach (var l in lines) g.DrawLine(pen, p[l[0]], p[l[1]]);
         }
     }
@@ -446,20 +644,14 @@ namespace Proyecto3D
             Z = z;
         }
 
-        public Vector3 RotateX(float a)
-        {
-            float
-                cos = (float) Math.Cos(a),
-                sin = (float) Math.Sin(a);
-            return new Vector3(X, Y * cos - Z * sin, Y * sin + Z * cos);
-        }
+        public Vector3 RotateX(float a) =>
+            new Vector3(X,
+                Y * (float) Math.Cos(a) - Z * (float) Math.Sin(a),
+                Y * (float) Math.Sin(a) + Z * (float) Math.Cos(a));
 
-        public Vector3 RotateY(float a)
-        {
-            float
-                cos = (float) Math.Cos(a),
-                sin = (float) Math.Sin(a);
-            return new Vector3(X * cos + Z * sin, Y, -X * sin + Z * cos);
-        }
+        public Vector3 RotateY(float a) =>
+            new Vector3(X * (float) Math.Cos(a) + Z * (float) Math.Sin(a),
+                Y,
+                -X * (float) Math.Sin(a) + Z * (float) Math.Cos(a));
     }
 }
